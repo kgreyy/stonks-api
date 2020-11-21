@@ -3,6 +3,7 @@ from bs4 import BeautifulSoup
 import re
 from datetime import date,timedelta,datetime
 import os
+import json
 
 def getPageCount(page):
     '''
@@ -12,10 +13,10 @@ def getPageCount(page):
     return int(pageText[pageText.find('/')+1:pageText.find(']')])
 
 def getAll(getter,parser,options):
-
     pageCount, page = tryGet(getter)
     data = parser(page)
-    if options['cons']: # conservative stopper
+    if options['cons']: # conservative stopper to return first page only
+        print("Conservative mode detected. Stopping now!")
         return data
     return iterAll(getter,parser,data,pageCount)
 
@@ -46,11 +47,11 @@ def parsePairedRows(page):
         return entries
 
 def getPage(url):
-        r = requests.get(url)
+        r = getResponse(url)
         return BeautifulSoup(r.content, features="html.parser")
 
 def testGet(url):
-        r = requests.get(url)
+        r = getResponse(url)
         r = BeautifulSoup(r.content, features="html.parser")
         try:
             return r.select_one('form > textarea').text
@@ -95,6 +96,9 @@ def searchReturn(strToFind,tupleList,searchIndex=None,returnIndex=None):
                 return x[returnIndex]
         return False
 
+def getResponse(url):
+    return requests.get(url)
+
 class CompanyDir():
     URL = "https://edge.pse.com.ph/companyDirectory/search.ax"
     config = {'pageNo': '', 'companyId': '', 'keyword': '', 'sortType': '', 'dateSortType': 'ASC',
@@ -108,7 +112,7 @@ class CompanyDir():
 
         print('Running with: '+str(kwargs))
 
-        config = kwargs.get('config',{})
+        config = kwargs.get('config',self.config)
         for x in config.keys():
             self.config[x]=config[x]
 
@@ -139,14 +143,15 @@ class CompanyDir():
 
 
 class Company():
+    ROOT_URL = "https://edge.pse.com.ph"
     MANAGEMENT_URL = "https://edge.pse.com.ph/companyPage/directors_and_management_list.do?cmpy_id="
     DISCLOSURE_URL = "https://edge.pse.com.ph/companyDisclosures/search.ax"
     STOCK_URL = "https://edge.pse.com.ph/companyPage/stockData.do?cmpy_id="
     DOWNLOAD_URL = "https://edge.pse.com.ph/downloadFile.do?file_id="
+    VIEWER_URL = "https://edge.pse.com.ph/openDiscViewer.do?edge_no="
 
     options = {'cons':False, 'only':''}
     officers = None
-    file_id = "" # for downloading
 
     def __init__(self,compID,**kwargs):
         self.compID = str(compID)
@@ -160,6 +165,7 @@ class Company():
         self.MANAGEMENT_URL+=self.compID
         self.STOCK_URL+=self.compID
         self.disclosures = []
+        self.fileIDs = [] # stack of files to download
 
         print(testGet(self.STOCK_URL))
 
@@ -195,7 +201,7 @@ class Company():
 
     def getDisclosures(self):
         print('\nGetting disclosures...')
-        self.disclosures = getAll(self.getDisclosureByNum,self.parseDisclosures,self.options)
+        self.disclosures = getAll(self.getDisclosureByPageNum,self.parseDisclosures,self.options)
         return self.disclosures
 
     def getSecuritiesInfo(self):
@@ -219,10 +225,13 @@ class Company():
     def parseDisclosureRow(self,row):
         cols = row.select('td')
         hyperlink = cols[0].select_one('a')
-        edgeNo = re.search("'(.+)'",hyperlink['onclick']).group(1)
-        return {'template': hyperlink.text, 'dateAnnounced':cols[1].text, 'formNumber':cols[2].text, 'circularNum':cols[3].text.strip(), 'edge_no': edgeNo}
+        try:
+            edgeNo = re.search("'(.+)'",hyperlink['onclick']).group(1)
+            return {'template': hyperlink.text, 'dateAnnounced':cols[1].text, 'formNumber':cols[2].text, 'circularNum':cols[3].text.strip(), 'edge_no': edgeNo}
+        except:
+            return {'template': None, 'dateAnnounced':None, 'formNumber':None, 'circularNum':None, 'edge_no': None}
 
-    def getDisclosureByNum(self,num):
+    def getDisclosureByPageNum(self,num):
         r = requests.get(self.DISCLOSURE_URL+"?pageNo="+str(num)+"&keyword="+self.compID+"&tmplNm=&sortType=date&dateSortType=DESC&cmpySortType=ASC")
         return BeautifulSoup(r.content, features="html.parser")
 
@@ -231,6 +240,66 @@ class Company():
             self.getOfficers()
         return searchReturn(officer,self.officers,1,0)
 
+    def exportDisclosureList(self, fn=None):
+        try:
+            if fn is None:
+                fn = self.name + ".json"
+            else:
+                makeDirs('/'.join(fn.split('/')[0:-1]))
+            if not self.disclosures:
+                self.getDisclosures()
+            with open(fn,'w+',encoding='utf-8') as f:
+                json.dump({"Disclosures":self.disclosures},f, indent=4, sort_keys=True)
+            print("Exported successfully!")
+        except Exception as e:
+            print('Unsuccessful:',e)
+            return False
+        return True
+
+    def findFileID(self, edgeCode):
+        page = getPage(self.VIEWER_URL+edgeCode)
+        attachments = page.select("#file_list > option")
+        count = len(attachments)
+        if count > 2:
+            print("More than one file was found.")
+        elif count < 1:
+            print("No attachments were found.")
+        for x in attachments[1:]:
+            self.fileIDs.append(x['value'])
+
+    def downloadDisclosure(self, edgeCode, fn=None):
+        self.findFileID(edgeCode)
+        for file in self.fileIDs:
+            try:
+                if fn is None:
+                    fn = "disclosures/" + self.name + "/"
+                makeDirs('/'.join(fn.split('/')))
+                res = getResponse(self.DOWNLOAD_URL+file)
+                ifn = re.search("\"(.+)\"\;",res.headers['content-disposition']).group(1)
+                with open(fn+ifn,'wb+') as f:
+                    f.write(res.content)
+                print("Downloaded " + ifn + " successfully!")
+                return fn+ifn
+            except Exception as e:
+                print('Unsuccessful with ' + ifn + " due to ",e)
+                return None
+
+    def findViewerID(self,edgeCode):
+        page = getPage(self.VIEWER_URL+edgeCode)
+        return page.select_one("iframe")["src"]
+
+    def downloadViewer(self, edgeCode, fn=None):
+        viewerID = self.findViewerID(edgeCode)
+        try:
+            if fn is None:
+                fn = "disclosures/" + self.name + "/"
+            makeDirs('/'.join(fn.split('/')))
+            res = getResponse(self.ROOT_URL + viewerID)
+            with open(fn+viewerID[-6:]+".html",'w+',encoding='utf-8') as f:
+                f.write(res.text)
+            print("Downloaded " + viewerID + " successfully!")
+        except Exception as e:
+            print('Unsuccessful with ' + viewerID + " due to ",e)
 
 class Security():
     LANDING_URL = "https://edge.pse.com.ph/companyPage/stockData.do"
@@ -283,7 +352,8 @@ class Security():
         try:
             if fn is None:
                 fn = 'hist_price/'+self.ticker+'.json'
-            makeDirs('/'.join(fn.split('/')[0:-1]))
+            else:
+                makeDirs('/'.join(fn.split('/')[0:-1]))
             with open(fn,'w+',encoding='utf-8') as f:
                 f.write('{"chartData" : \n'+str(self.getHistPrice())+'\n}')
         except Exception as e:
