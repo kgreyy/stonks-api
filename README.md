@@ -1,6 +1,6 @@
 # stonks-api
 
-##todo:
+## todo:
 1. investigate downloading mechanism for 2 or more files
 2. ~~multiprocessing for pdf parsing~~ DONE!
     1. handle companies who place cover letter(WHY?!)
