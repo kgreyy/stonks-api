@@ -8,11 +8,14 @@ def tagabasa(chunk):
     x = 0
     for file_path in chunk:
         file = parser.from_file(file_path)
-        if 'content' in file:
-            print(file["content"].strip()[:300])
-        else:
-            print("No content!")
-        print("DONE!" + str(x))
+        with open(".".join(file_path.split(".")[:-1])+".txt",w+,encoding="utf-8") as f:
+            if 'content' in file:
+                out = file["content"].strip()
+                print(out[:30])
+                f.write(out)
+            else:
+                print("No content!")
+            print("DONE!" + str(x))
         x+=1
 
 def main(cores):
