@@ -6,13 +6,12 @@ import os
 import json
 
 def getPageCount(page):
-    '''
-    parses page using bs4 for page count
-    '''
+    '''parses page using bs4 for page count'''
     pageText = page.select_one('span.count').text
     return int(pageText[pageText.find('/')+1:pageText.find(']')])
 
 def getAll(getter,parser,options):
+    '''decorator to unify getter and parser in getting pages'''
     pageCount, page = tryGet(getter)
     data = parser(page)
     if options['cons']: # conservative stopper to return first page only
@@ -21,6 +20,7 @@ def getAll(getter,parser,options):
     return iterAll(getter,parser,data,pageCount)
 
 def iterAll(getter,parser,data,pageCount):
+    '''iterates over getter and parser functions called from getAll'''
     curPageNo = 2
     while curPageNo <= pageCount:
         page = getter(curPageNo)
@@ -29,6 +29,7 @@ def iterAll(getter,parser,data,pageCount):
     return data
 
 def tryGet(getter):
+    '''tester for getAll to catch possible errors'''
     try:
         page = getter(1)
         pageCount = getPageCount(page)
@@ -39,26 +40,29 @@ def tryGet(getter):
     return pageCount, page
 
 def parsePairedRows(page):
-        rows = page.select('tr')
-        entries = []
-        for row in rows:
-            pos,name = map(lambda x: x.text.strip(), row.select('td'))
-            entries.append((pos,name))
-        return entries
+    '''parses dyad rows into tuple'''
+    rows = page.select('tr')
+    entries = []
+    for row in rows:
+        pos,name = map(lambda x: x.text.strip(), row.select('td'))
+        entries.append((pos,name))
+    return entries
 
 def getPage(url):
-        r = getResponse(url)
-        return BeautifulSoup(r.content, features="html.parser")
+    '''sends a get request to a url and returns BS4 object'''
+    r = getResponse(url)
+    return BeautifulSoup(r.content, features="html.parser")
 
 def testGet(url):
-        r = getResponse(url)
-        r = BeautifulSoup(r.content, features="html.parser")
-        try:
-            return r.select_one('form > textarea').text
-        except:
-            return "Success!"
+    '''sends get request to obtain stock ticker'''
+    r = getPage(url)
+    try:
+        return r.select_one('form > textarea').text
+    except:
+        return "Success!"
 
 def makeDirs(path):
+    '''makes a directory given path'''
     try:
         os.makedirs(path)
         print("Directory " +path+" created ")
@@ -66,11 +70,11 @@ def makeDirs(path):
         pass
 
 def processConfig(varsDict):
+    '''converts dictionary into URL string to configure request parameters'''
     return '?'+'&'.join([x+'='+str(y) for x,y in varsDict])
-def plusOut(string):
-    return string.replace('+',' ')
 
-def reverseProcess(varsString):# optional
+def reverseProcess(varsString):
+    '''function for testing - unused but could help when debugging request URLs'''
     dictz = {}
     for x in varsString.split('&'):
         if x!='':
@@ -87,14 +91,17 @@ def stringToDate(strdate):
 def subtractDays(date,interval):
     return date-timedelta(days=interval)
 
-def searchReturn(strToFind,tupleList,searchIndex=None,returnIndex=None):
-        if searchIndex and returnIndex:
-            print('Error: both indexes are needed!')
-            return None
-        for x in tupleList:
-            if x[searchIndex]==strToFind:
-                return x[returnIndex]
-        return False
+def searchReturn(strToFind,tupleList,searchIndex=None,returnIndex=None,multipleMatch=False):
+    '''returns search index from list of tuples'''
+    if searchIndex and returnIndex:
+        print('Error: both indexes are needed!')
+        return None
+    if oneMatch:
+        return [x for x in tupleList if x[searchIndex]==strToFind]
+    for x in tupleList:
+        if x[searchIndex]==strToFind:
+            return x[returnIndex]
+    return False
 
 def getResponse(url):
     return requests.get(url)
@@ -143,24 +150,26 @@ class CompanyDir():
 
 
 class Company():
-    ROOT_URL = "https://edge.pse.com.ph"
-    MANAGEMENT_URL = "https://edge.pse.com.ph/companyPage/directors_and_management_list.do?cmpy_id="
-    DISCLOSURE_URL = "https://edge.pse.com.ph/companyDisclosures/search.ax"
-    STOCK_URL = "https://edge.pse.com.ph/companyPage/stockData.do?cmpy_id="
-    DOWNLOAD_URL = "https://edge.pse.com.ph/downloadFile.do?file_id="
-    VIEWER_URL = "https://edge.pse.com.ph/openDiscViewer.do?edge_no="
 
-    options = {'cons':False, 'only':''}
-    officers = None
+    default = {'cons':False, 'only':''}
 
     def __init__(self,compID,**kwargs):
+        self.ROOT_URL = "https://edge.pse.com.ph"
+        self.MANAGEMENT_URL = "https://edge.pse.com.ph/companyPage/directors_and_management_list.do?cmpy_id="
+        self.DISCLOSURE_URL = "https://edge.pse.com.ph/companyDisclosures/search.ax"
+        self.STOCK_URL = "https://edge.pse.com.ph/companyPage/stockData.do?cmpy_id="
+        self.DOWNLOAD_URL = "https://edge.pse.com.ph/downloadFile.do?file_id="
+        self.VIEWER_URL = "https://edge.pse.com.ph/openDiscViewer.do?edge_no="
+
+        self.options = {}
+        self.officers = None
         self.compID = str(compID)
         self.name = kwargs.pop('name',self.compID)
 
         print('Getting '+ self.compID +' with: '+str(kwargs))
 
-        for x in kwargs.keys():
-            self.options[x] = kwargs.get(x,self.options[x])
+        for x in self.default.keys():
+            self.options[x] = kwargs.get(x,self.default[x])
 
         self.MANAGEMENT_URL+=self.compID
         self.STOCK_URL+=self.compID
@@ -269,6 +278,7 @@ class Company():
 
     def downloadDisclosure(self, edgeCode, fn=None):
         self.findFileID(edgeCode)
+        out = []
         for file in self.fileIDs:
             try:
                 if fn is None:
@@ -279,10 +289,11 @@ class Company():
                 with open(fn+ifn,'wb+') as f:
                     f.write(res.content)
                 print("Downloaded " + ifn + " successfully!")
-                return fn+ifn
+                out.append(fn+ifn)
             except Exception as e:
                 print('Unsuccessful with ' + ifn + " due to ",e)
                 return None
+        return out
 
     def findViewerID(self,edgeCode):
         page = getPage(self.VIEWER_URL+edgeCode)
@@ -352,8 +363,7 @@ class Security():
         try:
             if fn is None:
                 fn = 'hist_price/'+self.ticker+'.json'
-            else:
-                makeDirs('/'.join(fn.split('/')[0:-1]))
+            makeDirs('/'.join(fn.split('/')[0:-1]))
             with open(fn,'w+',encoding='utf-8') as f:
                 f.write('{"chartData" : \n'+str(self.getHistPrice())+'\n}')
         except Exception as e:
