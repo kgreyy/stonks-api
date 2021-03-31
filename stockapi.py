@@ -282,7 +282,7 @@ class Company():
         for file in self.fileIDs:
             try:
                 if fn is None:
-                    fn = "disclosures/" + self.name + "/"
+                    fn = "disclosure/" + self.name + "/"
                 makeDirs('/'.join(fn.split('/')))
                 res = getResponse(self.DOWNLOAD_URL+file)
                 ifn = re.search("\"(.+)\"\;",res.headers['content-disposition']).group(1)
